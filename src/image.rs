@@ -5,12 +5,8 @@ use std::error::Error;
 
 use byteorder;
 
-use color;
 use color::ColorType;
 use buffer::{ImageBuffer, Pixel};
-
-use animation::{Frame, Frames};
-use dynimage::decoder_to_image;
 
 /// An enumeration of Image errors
 #[derive(Debug)]
@@ -104,14 +100,6 @@ pub enum DecodingResult {
     U16(Vec<u16>)
 }
 
-// A buffer for image decoding
-pub enum DecodingBuffer<'a> {
-    /// A slice of unsigned bytes
-    U8(&'a mut [u8]),
-    /// A slice of unsigned words
-    U16(&'a mut [u16])
-}
-
 /// An enumeration of supported image formats.
 /// Not all formats support both encoding and decoding.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -149,74 +137,8 @@ pub trait ImageDecoder: Sized {
     /// Returns a tuple containing the width and height of the image
     fn dimensions(&mut self) -> ImageResult<(u32, u32)>;
 
-    /// Returns the color type of the image e.g. RGB(8) (8bit RGB)
-    fn colortype(&mut self) -> ImageResult<ColorType>;
-
-    /// Returns the length in bytes of one decoded row of the image
-    fn row_len(&mut self) -> ImageResult<usize>;
-
-    /// Reads one row from the image into ```buf``` and returns the row index
-    fn read_scanline(&mut self, buf: &mut [u8]) -> ImageResult<u32>;
-
     /// Decodes the entire image and return it as a Vector
     fn read_image(&mut self) -> ImageResult<DecodingResult>;
-
-    /// Returns true if the image is animated
-    fn is_animated(&mut self) -> ImageResult<bool> {
-        // since most image formats do not support animation
-        // just return false by default
-        return Ok(false)
-    }
-
-    /// Returns the frames of the image
-    ///
-    /// If the image is not animated it returns a single frame
-    fn into_frames(self) -> ImageResult<Frames> {
-        Ok(Frames::new(vec![
-            Frame::new(try!(decoder_to_image(self)).to_rgba())
-        ]))
-    }
-
-    /// Decodes a specific region of the image, represented by the rectangle
-    /// starting from ```x``` and ```y``` and having ```length``` and ```width```
-    fn load_rect(&mut self, x: u32, y: u32, length: u32, width: u32) -> ImageResult<Vec<u8>> {
-        let (w, h) = try!(self.dimensions());
-
-        if length > h || width > w || x > w || y > h {
-            return Err(ImageError::DimensionError)
-        }
-
-        let c = try!(self.colortype());
-
-        let bpp = color::bits_per_pixel(c) / 8;
-
-        let rowlen  = try!(self.row_len());
-
-        let mut buf = vec![0u8; length as usize * width as usize * bpp];
-        let mut tmp = vec![0u8; rowlen];
-
-        loop {
-            let row = try!(self.read_scanline(&mut tmp));
-
-            if row - 1 == y {
-                break
-            }
-        }
-
-        for i in 0..length as usize {
-            {
-                let from = &tmp[x as usize * bpp..width as usize * bpp];
-
-                let to   = &mut buf[i * width as usize * bpp..width as usize * bpp];
-
-                ::copy_memory(from, to);
-            }
-
-            let _ = try!(self.read_scanline(&mut tmp));
-        }
-
-        Ok(buf)
-    }
 }
 
 

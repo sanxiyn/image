@@ -1,14 +1,10 @@
 use std::slice::{ Chunks, ChunksMut };
 use std::ops::{ Deref, DerefMut, Index, IndexMut };
 use std::marker::PhantomData;
-use std::path::Path;
-use std::io;
 use num::Zero;
 
 use traits::Primitive;
 use color::{ Rgb, Rgba, Luma, LumaA, FromColor, ColorType };
-use image::GenericImage;
-use dynimage::save_buffer;
 use utils::expand_packed;
 
 /// A generalized pixel.
@@ -34,12 +30,6 @@ pub trait Pixel: Copy + Clone {
     /// Returns the ColorType for this pixel format
     fn color_type() -> ColorType;
 
-    /// Returns the channels of this pixel as a 4 tuple. If the pixel
-    /// has less than 4 channels the remainder is filled with the maximum value
-    ///
-    /// TODO deprecate
-    fn channels4(&self) -> (Self::Subpixel, Self::Subpixel, Self::Subpixel, Self::Subpixel);
-
     /// Construct a pixel from the 4 channels a, b, c and d.
     /// If the pixel does not contain 4 channels the extra are ignored.
     ///
@@ -57,50 +47,6 @@ pub trait Pixel: Copy + Clone {
     /// Note: The slice length is not checked on creation. Thus the caller has to ensure
     /// that the slice is long enough to precent panics if the pixel is used later on.
     fn from_slice_mut<'a>(slice: &'a mut [Self::Subpixel]) -> &'a mut Self;
-
-    /// Convert this pixel to RGB
-    fn to_rgb(&self) -> Rgb<Self::Subpixel>;
-
-    /// Convert this pixel to RGB with an alpha channel
-    fn to_rgba(&self) -> Rgba<Self::Subpixel>;
-
-    /// Convert this pixel to luma
-    fn to_luma(&self) -> Luma<Self::Subpixel>;
-
-    /// Convert this pixel to luma with an alpha channel
-    fn to_luma_alpha(&self) -> LumaA<Self::Subpixel>;
-
-    /// Apply the function ```f``` to each channel of this pixel.
-    fn map<F>(&self, f: F) -> Self where F: Fn(Self::Subpixel) -> Self::Subpixel;
-
-    /// Apply the function ```f``` to each channel of this pixel.
-    fn apply<F>(&mut self, f: F) where F: Fn(Self::Subpixel) -> Self::Subpixel;
-
-    /// Apply the function ```f``` to each channel except the alpha channel.
-    /// Apply the function ```g``` to the alpha channel.
-    fn map_with_alpha<F, G>(&self, f: F, g: G) -> Self
-        where F: Fn(Self::Subpixel) -> Self::Subpixel, G: Fn(Self::Subpixel) -> Self::Subpixel;
-
-    /// Apply the function ```f``` to each channel except the alpha channel.
-    /// Apply the function ```g``` to the alpha channel. Works in-place.
-    fn apply_with_alpha<F, G>(&mut self, f: F, g: G)
-        where F: Fn(Self::Subpixel) -> Self::Subpixel, G: Fn(Self::Subpixel) -> Self::Subpixel;
-
-    /// Apply the function ```f``` to each channel of this pixel and
-    /// ```other``` pairwise.
-    fn map2<F>(&self, other: &Self, f: F) -> Self
-        where F: Fn(Self::Subpixel, Self::Subpixel) -> Self::Subpixel;
-
-    /// Apply the function ```f``` to each channel of this pixel and
-    /// ```other``` pairwise. Works in-place.
-    fn apply2<F>(&mut self, other: &Self, f: F)
-        where F: Fn(Self::Subpixel, Self::Subpixel) -> Self::Subpixel;
-
-    /// Invert this pixel
-    fn invert(&mut self);
-
-    /// Blend the color of a given pixel into ourself, taking into account alpha channels
-    fn blend(&mut self, other: &Self);
 }
 
 /// Iterate over pixel refs.
@@ -346,23 +292,6 @@ where P: Pixel + 'static,
     }
 }
 
-impl<P, Container> ImageBuffer<P, Container>
-where P: Pixel<Subpixel=u8> + 'static,
-      Container: Deref<Target=[u8]> {
-    /// Saves the buffer to a file at the path specified.
-    ///
-    /// The image format is derived from the file extension.
-    /// Currently only jpeg and png files are supported.
-    pub fn save<Q>(&self, path: Q) -> io::Result<()> where Q: AsRef<Path> {
-        // This is valid as the subpixel is u8.
-        save_buffer(path,
-                    self,
-                    self.width(),
-                    self.height(),
-                    <P as Pixel>::color_type())
-    }
-}
-
 impl<P, Container> Deref for ImageBuffer<P, Container>
 where P: Pixel + 'static,
       P::Subpixel: 'static,
@@ -415,64 +344,6 @@ where P: Pixel,
             height: self.height,
             _phantom: PhantomData,
         }
-    }
-}
-
-impl<P, Container> GenericImage for ImageBuffer<P, Container>
-where P: Pixel + 'static,
-      Container: Deref<Target=[P::Subpixel]> + DerefMut,
-      P::Subpixel: 'static {
-
-    type Pixel = P;
-
-    fn dimensions(&self) -> (u32, u32) {
-        self.dimensions()
-    }
-
-    fn bounds(&self) -> (u32, u32, u32, u32) {
-        (0, 0, self.width, self.height)
-    }
-
-    fn get_pixel(&self, x: u32, y: u32) -> P {
-        *self.get_pixel(x, y)
-    }
-
-    fn get_pixel_mut(&mut self, x: u32, y: u32) -> &mut P {
-        self.get_pixel_mut(x, y)
-    }
-    
-    /// Returns the pixel located at (x, y), ignoring bounds checking.
-    #[inline(always)]
-    unsafe fn unsafe_get_pixel(&self, x: u32, y: u32) -> P {
-        let no_channels = <P as Pixel>::channel_count() as usize;
-        let index  = no_channels as isize * (y * self.width + x) as isize;
-        *<P as Pixel>::from_slice(
-            ::std::slice::from_raw_parts(self.data.as_ptr().offset(index), 
-                                         no_channels)
-        )
-    }
-
-    fn put_pixel(&mut self, x: u32, y: u32, pixel: P) {
-        *self.get_pixel_mut(x, y) = pixel
-    }
-    
-    /// Puts a pixel at location (x, y), ignoring bounds checking.
-    #[inline(always)]
-    unsafe fn unsafe_put_pixel(&mut self, x: u32, y: u32, pixel: P) {
-        let no_channels = <P as Pixel>::channel_count() as usize;
-        let index  = no_channels as isize * (y * self.width + x) as isize;
-        let p = <P as Pixel>::from_slice_mut(
-            ::std::slice::from_raw_parts_mut(self.data.as_mut_ptr().offset(index), 
-                                             no_channels)
-        );
-        *p = pixel
-    }
-
-    /// Put a pixel at location (x, y), taking into account alpha channels
-    ///
-    /// DEPRECATED: This method will be removed. Blend the pixel directly instead.
-    fn blend_pixel(&mut self, x: u32, y: u32, p: P) {
-        self.get_pixel_mut(x, y).blend(&p)
     }
 }
 
@@ -542,41 +413,6 @@ pub trait ConvertBuffer<T> {
     /// A generic impementation is provided to convert any image buffer to a image buffer
     /// based on a `Vec<T>`.
     fn convert(&self) -> T;
-}
-
-// concrete implementation Luma -> Rgba
-impl GrayImage {
-    /// Expands a color palette by re-using the existing buffer.
-    /// Assumes 8 bit per pixel. Uses an optionally transparent index to
-    /// adjust it's alpha value accordingly.
-    pub fn expand_palette(self,
-                          palette: &[(u8, u8, u8)],
-                          transparent_idx: Option<u8>) -> RgbaImage {
-        let (width, height) = self.dimensions();
-        let mut data = self.into_raw();
-        let entries = data.len();
-        data.reserve_exact(entries.checked_mul(3).unwrap()); // 3 additional channels
-        // set_len is save since type is u8 an the data never read
-        unsafe { data.set_len(entries.checked_mul(4).unwrap()) }; // 4 channels in total
-        let mut buffer = ImageBuffer::from_vec(width, height, data).unwrap();
-        expand_packed(&mut buffer, 4, 8, |idx, pixel| {
-            let (r, g, b) = palette[idx as usize];
-            let a = if let Some(t_idx) = transparent_idx {
-                if t_idx == idx {
-                    0
-                } else {
-                    255
-                }
-            } else {
-                255
-            };
-            pixel[0] = r;
-            pixel[1] = g;
-            pixel[2] = b;
-            pixel[3] = a;
-        });
-        buffer
-    }
 }
 
 // TODO: Equality constraints are not yet supported in where clauses, when they
